@@ -1,8 +1,34 @@
 // this script automates the revenue reconciliation calculations.
-// start with a raw download from here: https://platform.datorama.com/108713/visualize/11267125/page/v2/4647472
+// start with a raw data from here: https://platform.datorama.com/108713/visualize/11267125/page/v2/4647472
 // import (or copy/paste) this into google sheets
-// delete rows with 'not valid', 'unknown', etc
+// delete rows with 'not valid', 'unknown', etc. 
+// potentially will add 'data filtering' step to this script to cut out the above processing step
 // do not change any column names
+
+
+// ingested headers
+const Header_Region = '*Region';
+const Header_Advertiser = '*Advertiser';
+const Header_Platform = '*Platform';
+const Header_CampaignName = 'Campaign Name';
+const Header_Op1SalesID = '*Operative ID';
+const Header_AdSetName = 'Ad Set Name | Line Item Name (GAM)';
+const Header_Op1LineID = '*Operative Line Item ID';
+const Header_CostType = 'Cost Type (Operative)';
+const Header_ContractedQuantity = 'Contracted Quantity (Operative)';
+const Header_Impressions = '*Impressions';
+const Header_VideoViews = 'Video Views';
+const Header_Clicks = '*Clicks (All)';
+const Header_KPIValue = '*KPI Value';
+const Header_Spend = 'Amount Spent / Media Cost'
+
+// calculated columns
+const Col_Weight = "Weight";
+const Col_CostPerKPI = 'Cost per KPI';
+const Col_ContractedActual = 'Contracted Actual';
+const Col_ExtraDelivery = 'Extra Delivery'
+const Col_ExtraSpend = 'Extra Spend';
+const Col_Check = 'Check';
 
 
 // creates menu button
@@ -10,34 +36,41 @@ function onOpen() {
   SpreadsheetApp
     .getUi()
     .createMenu('Sachin Things')
-    .addItem('Find Contracted Actual', 'mapOD')
+    .addItem('Find Contracted Actual', 'mapOverDelivery')
     .addToUi();
 }
 
 
 // starts function, copies data to use without affecting the original 
-function mapOD() {
+function mapOverDelivery() {
   const ss = SpreadsheetApp.getActiveSheet();
   const data = ss.getDataRange().getValues();
   const header = data[0].slice();
-  header.push('Weight', 'Cost per KPI', 'Contracted Actual', 'Extra Delivery', 'Extra Spend');
+  header.push(
+    Col_Weight,
+    Col_CostPerKPI,
+    Col_ContractedActual,
+    Col_ExtraDelivery,
+    Col_ExtraSpend,
+    );
+
   const records = data.slice(1);
 
   // groups rows by Op1 Line ID, sums total delivery
   const groupedLineIDs = {};
   records.forEach(record => {
-      const lineID = record[header.indexOf('*Operative Line Item ID')];
+      const lineID = record[header.indexOf(Header_Op1LineID)];
 
       if (!groupedLineIDs[lineID]) {
         groupedLineIDs[lineID] = {
           totalDelivery: 0,
-          contractedGoal: record[header.indexOf('Contracted Quantity (Operative)')],
+          contractedGoal: record[header.indexOf(Header_ContractedQuantity)],
           rows: []
         };
       };
 
       groupedLineIDs[lineID].rows.push(record);
-      groupedLineIDs[lineID].totalDelivery += Number(record[header.indexOf('*KPI Value')]);
+      groupedLineIDs[lineID].totalDelivery += Number(record[header.indexOf(Header_KPIValue)]);
     }
   );
 
@@ -47,11 +80,11 @@ function mapOD() {
     const { totalDelivery, contractedGoal, rows } = group;
 
     rows.forEach(row => {
-      const kpi = Number(row[header.indexOf('*KPI Value')]) || 0;
-      const spend = Number(row[header.indexOf('Amount Spent / Media Cost')]) || 0;
+      const kpi = Number(row[header.indexOf(Header_KPIValue)]) || 0;
+      const spend = Number(row[header.indexOf(Header_Spend)]) || 0;
       let costPerKPI = 0
 
-      switch (String(row[header.indexOf('Cost Type (Operative)')])) {
+      switch (String(row[header.indexOf(Header_CostType)])) {
         case 'CPM':
           costPerKPI = kpi ? (spend / kpi) * 1000 : 0;
           break;
@@ -70,7 +103,7 @@ function mapOD() {
       const extraDelivery = kpi - contractedActual;
       let extraSpend = 0;
 
-      switch (String(row[header.indexOf('Cost Type (Operative)')])) {
+      switch (String(row[header.indexOf(Header_CostType)])) {
         case 'CPM':
           extraSpend = extraDelivery / 1000 * costPerKPI;
           break;
@@ -93,3 +126,4 @@ function mapOD() {
   ss.clearContents();
   ss.getRange(1, 1, out.length, header.length).setValues(out);
 }
+
