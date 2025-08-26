@@ -1,12 +1,8 @@
-// this script automates the revenue reconciliation calculations.
-// start with a raw data from here: https://platform.datorama.com/108713/visualize/11267125/page/v2/4647472
-// import (or copy/paste) this into google sheets
-// delete rows with 'not valid', 'unknown', etc. 
-// potentially will add 'data filtering' step to this script to cut out the above processing step
-// do not change any column names
+// ==================================================
+// Revenue Reconciliation Automation
+// ==================================================
 
-
-// ingested headers
+// ---- Ingested headers (do not rename in sheet) ----
 const Header_Region = '*Region';
 const Header_Advertiser = '*Advertiser';
 const Header_Platform = '*Platform';
@@ -20,18 +16,18 @@ const Header_Impressions = '*Impressions';
 const Header_VideoViews = 'Video Views';
 const Header_Clicks = '*Clicks (All)';
 const Header_KPIValue = '*KPI Value';
-const Header_Spend = 'Amount Spent / Media Cost'
+const Header_Spend = 'Amount Spent / Media Cost';
 
-// calculated columns
+// ---- Calculated columns ----
 const Col_Weight = "Weight";
 const Col_CostPerKPI = 'Cost per KPI';
 const Col_ContractedActual = 'Contracted Actual';
-const Col_ExtraDelivery = 'Extra Delivery'
+const Col_ExtraDelivery = 'Extra Delivery';
 const Col_ExtraSpend = 'Extra Spend';
-const Col_Check = 'Check';
 
-
-// creates menu button
+// ==================================================
+// Menu button
+// ==================================================
 function onOpen() {
   SpreadsheetApp
     .getUi()
@@ -40,90 +36,128 @@ function onOpen() {
     .addToUi();
 }
 
+// ==================================================
+// Helpers
+// ==================================================
+function calculateCostPerKPI(costType, spend, kpi) {
+  if (!kpi) return 0;
+  switch (costType) {
+    case 'CPM': return (spend / kpi) * 1000;
+    case 'CPC':
+    case 'Cost Per Unit': return spend / kpi;
+    default: return 0;
+  }
+}
 
-// starts function, copies data to use without affecting the original 
+function calculateExtraSpend(costType, extraDelivery, costPerKPI) {
+  switch (costType) {
+    case 'CPM': return (extraDelivery / 1000) * costPerKPI;
+    case 'CPC':
+    case 'Cost Per Unit': return extraDelivery * costPerKPI;
+    default: return 0;
+  }
+}
+
+function validateHeaders(headerRow) {
+  const requiredHeaders = [
+    Header_Region, Header_Advertiser, Header_Platform,
+    Header_CampaignName, Header_Op1SalesID, Header_AdSetName,
+    Header_Op1LineID, Header_CostType, Header_ContractedQuantity,
+    Header_Impressions, Header_VideoViews, Header_Clicks,
+    Header_KPIValue, Header_Spend,
+  ];
+
+  requiredHeaders.forEach(h => {
+    if (headerRow.indexOf(h) === -1) {
+      throw new Error(`Missing column: ${h}`);
+    }
+  });
+}
+
+// ==================================================
+// Main function
+// ==================================================
 function mapOverDelivery() {
-  const ss = SpreadsheetApp.getActiveSheet();
-  const data = ss.getDataRange().getValues();
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const data = sheet.getDataRange().getValues();
+
+  if (data.length < 2) {
+    SpreadsheetApp.getUi().alert("No data found.");
+    return;
+  }
+
   const header = data[0].slice();
+  validateHeaders(header);
+
+  // Build column index map
+  const colIdx = {
+    region: header.indexOf(Header_Region),
+    advertiser: header.indexOf(Header_Advertiser),
+    platform: header.indexOf(Header_Platform),
+    campaignName: header.indexOf(Header_CampaignName),
+    op1SalesID: header.indexOf(Header_Op1SalesID),
+    adSetName: header.indexOf(Header_AdSetName),
+    op1LineID: header.indexOf(Header_Op1LineID),
+    costType: header.indexOf(Header_CostType),
+    contractedQuantity: header.indexOf(Header_ContractedQuantity),
+    impressions: header.indexOf(Header_Impressions),
+    videoViews: header.indexOf(Header_VideoViews),
+    clicks: header.indexOf(Header_Clicks),
+    kpiValue: header.indexOf(Header_KPIValue),
+    spend: header.indexOf(Header_Spend),
+  };
+
+  // Extend header with calculated columns
   header.push(
     Col_Weight,
     Col_CostPerKPI,
     Col_ContractedActual,
     Col_ExtraDelivery,
-    Col_ExtraSpend,
-    );
+    Col_ExtraSpend
+  );
 
   const records = data.slice(1);
 
-  // groups rows by Op1 Line ID, sums total delivery
+  // ---- Group by Line ID ----
   const groupedLineIDs = {};
-  records.forEach(record => {
-      const lineID = record[header.indexOf(Header_Op1LineID)];
+  records.forEach(row => {
+    const lineID = row[colIdx.op1LineID];
 
-      if (!groupedLineIDs[lineID]) {
-        groupedLineIDs[lineID] = {
-          totalDelivery: 0,
-          contractedGoal: record[header.indexOf(Header_ContractedQuantity)],
-          rows: []
-        };
+    if (!groupedLineIDs[lineID]) {
+      groupedLineIDs[lineID] = {
+        totalDelivery: 0,
+        contractedGoal: row[colIdx.contractedQuantity],
+        rows: []
       };
-
-      groupedLineIDs[lineID].rows.push(record);
-      groupedLineIDs[lineID].totalDelivery += Number(record[header.indexOf(Header_KPIValue)]);
     }
-  );
 
-  // process the grouped data
-  // for each grouping, for each row, find the % distribution, weighted goal, extra delivery, and extra spend
-  Object.values(groupedLineIDs).forEach(group => {
-    const { totalDelivery, contractedGoal, rows } = group;
+    groupedLineIDs[lineID].rows.push(row);
+    groupedLineIDs[lineID].totalDelivery += Number(row[colIdx.kpiValue]) || 0;
+  });
 
+  // ---- Process each group ----
+  Object.values(groupedLineIDs).forEach(({ totalDelivery, contractedGoal, rows }) => {
     rows.forEach(row => {
-      const kpi = Number(row[header.indexOf(Header_KPIValue)]) || 0;
-      const spend = Number(row[header.indexOf(Header_Spend)]) || 0;
-      let costPerKPI = 0
+      const kpi = Number(row[colIdx.kpiValue]) || 0;
+      const spend = Number(row[colIdx.spend]) || 0;
+      const costType = String(row[colIdx.costType]);
 
-      switch (String(row[header.indexOf(Header_CostType)])) {
-        case 'CPM':
-          costPerKPI = kpi ? (spend / kpi) * 1000 : 0;
-          break;
-        case 'CPC':
-          costPerKPI = kpi ? (spend / kpi) : 0;
-          break;
-        case 'Cost Per Unit':
-          costPerKPI = kpi ? (spend / kpi) : 0;
-          break;
-        default:
-          break;
-      }
-
-      const weight = kpi / totalDelivery;
+      const costPerKPI = calculateCostPerKPI(costType, spend, kpi);
+      const weight = totalDelivery ? kpi / totalDelivery : 0;
       const contractedActual = weight * contractedGoal;
       const extraDelivery = kpi - contractedActual;
-      let extraSpend = 0;
-
-      switch (String(row[header.indexOf(Header_CostType)])) {
-        case 'CPM':
-          extraSpend = extraDelivery / 1000 * costPerKPI;
-          break;
-        case 'CPC':
-          extraSpend = extraDelivery * costPerKPI;
-          break;
-        case 'Cost Per Unit':
-          extraSpend = extraDelivery * costPerKPI;
-          break;
-        default:
-          break;
-      }
+      const extraSpend = calculateExtraSpend(costType, extraDelivery, costPerKPI);
 
       row.push(weight, costPerKPI, contractedActual, extraDelivery, extraSpend);
     });
   });
 
-  // put the processed data into the sheet: to be completed
+  // ---- Write results ----
   const out = [header, ...records];
-  ss.clearContents();
-  ss.getRange(1, 1, out.length, header.length).setValues(out);
-}
 
+  // Clear content only (preserves formatting)
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+
+  // Write new results
+  sheet.getRange(1, 1, out.length, header.length).setValues(out);
+}
